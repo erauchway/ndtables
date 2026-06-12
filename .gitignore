@@ -1,2 +1,6 @@
 .DS_Store
 ndt-env
+
+/.quarto/
+**/*.quarto_ipynb
+.Rproj.user

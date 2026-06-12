@@ -1,0 +1,49 @@
+---
+title: "extract"
+format: html
+---
+
+```{r}
+library(tidyverse)
+library(magrittr)
+library(pdftools)
+library(base64enc)
+library(reticulate)
+use_virtualenv("./ndt-env")
+```
+
+
+```{r}
+## collect list of files to convert
+## list.files(path = "../ndpdfs/", pattern = "\\.pdf$", full.names = TRUE) %>%
+list.files(path = "../ndpdfs", pattern = "consolidated*", full.names = TRUE) %>%
+  normalizePath() -> consol
+```
+
+```{r}
+## convert pdfs in list to pngs at 200 dpi (hopefully good enough)
+for (file in consol) {
+  pdf_convert(file, format = "png", dpi = 200)
+}
+list.files(path = "./", pattern = "\\.png$", full.names = TRUE) %>%
+  normalizePath() -> table_pages
+```
+
+```{r}
+## mlx_vlm generate --model mlx-community/GLM-OCR-bf16 --image table.png --prompt "Table Recognition:"
+for (file in table_pages) {
+  system2(py_exe(), 
+          args = c('-m mlx_vlm generate',
+                   "--model mlx-community/GLM-OCR-bf16",
+                   paste0("--image ", file),
+                   "--max-tokens 12288",
+                   "--temperature 0.0",
+                   "--prompt \"Table Recognition:\""),
+          stdout = paste0(file, ".html")
+  )
+}
+
+```
+
+
+
