@@ -1,5 +1,6 @@
 .DS_Store
-ndt-env
+ndt-env/
+pngs/
 
 /.quarto/
 **/*.quarto_ipynb
