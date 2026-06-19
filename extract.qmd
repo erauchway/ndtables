@@ -7,43 +7,448 @@ format: html
 library(tidyverse)
 library(magrittr)
 library(pdftools)
-library(base64enc)
 library(reticulate)
+library(magick)
+library(rvest)
+library(janitor)
 use_virtualenv("./ndt-env")
+## make a tibble of identifications; note this will need altering because they change DC, PI, etc.
+tibble(state = c("District of Columbia", "Puerto Rico", "Virgin Islands", "Philippine Is.", "Panama Canal"), st = c("DC", "PR", "VI", "PI", "PC")) %>%
+  rbind(tibble(state = state.name, st = state.abb)) -> id
 ```
 
 
 ```{r}
 ## collect list of files to convert
 ## list.files(path = "../ndpdfs/", pattern = "\\.pdf$", full.names = TRUE) %>%
-list.files(path = "../ndpdfs", pattern = "consolidated*", full.names = TRUE) %>%
+list.files(path = "../ndpdfs", pattern = "terr*", full.names = TRUE) %>%
   normalizePath() -> consol
 ```
 
 ```{r}
-## convert pdfs in list to pngs at 200 dpi (hopefully good enough)
+## convert pdfs in list to pngs at 400 dpi 
 for (file in consol) {
-  pdf_convert(file, format = "png", dpi = 200)
+  pdf_convert(file, format = "png", dpi = 400)
 }
+
+## make list of files, though it turns out we probably won't use it
 list.files(path = "./", pattern = "\\.png$", full.names = TRUE) %>%
   normalizePath() -> table_pages
+
+
+
 ```
 
 ```{r}
-## mlx_vlm generate --model mlx-community/GLM-OCR-bf16 --image table.png --prompt "Table Recognition:"
-for (file in table_pages) {
-  system2(py_exe(), 
+## we're going to cut things down to manageable sizes, starting with uninsured loans on the first page of the first report, 1933--1939
+
+## manual insert
+file = "./consol_loans1_justcols.png"
+  
+    system2(py_exe(), 
           args = c('-m mlx_vlm generate',
                    "--model mlx-community/GLM-OCR-bf16",
                    paste0("--image ", file),
-                   "--max-tokens 12288",
+                   "--max-tokens 24576",
                    "--temperature 0.0",
-                   "--prompt \"Table Recognition:\""),
+                   "--prompt \"Table Recognition: Extract the table exactly as shown. Do not repeat rows or columns. Output only the table, no explanation.\""),
           stdout = paste0(file, ".html")
   )
-}
+```
 
+```{r}
+file = "./consol_loans2_justcols.png"
+system2(py_exe(), 
+          args = c('-m mlx_vlm generate',
+                   "--model mlx-community/GLM-OCR-bf16",
+                   paste0("--image ", file),
+                   "--max-tokens 24576",
+                   "--temperature 0.0",
+                   "--prompt \"Table Recognition: Extract the table exactly as shown. Do not repeat rows or columns. Output only the table, no explanation.\""),
+          stdout = paste0(file, ".html")
+  )
+```
+
+```{r}
+file = "./consol_exp1_justcols.png"
+system2(py_exe(), 
+          args = c('-m mlx_vlm generate',
+                   "--model mlx-community/GLM-OCR-bf16",
+                   paste0("--image ", file),
+                   "--max-tokens 24576",
+                   "--temperature 0.0",
+                   "--prompt \"Table Recognition: Extract the table exactly as shown. Do not repeat rows or columns. Output only the table, no explanation.\""),
+          stdout = paste0(file, ".html")
+  )
+```
+
+```{r}
+file = "./consol_exp2_justcols.png"
+
+system2(py_exe(), 
+          args = c('-m mlx_vlm generate',
+                   "--model mlx-community/GLM-OCR-bf16",
+                   paste0("--image ", file),
+                   "--max-tokens 24576",
+                   "--temperature 0.0",
+                   "--prompt \"Table Recognition: Extract the table exactly as shown. Do not repeat rows or columns. Output only the table, no explanation.\""),
+          stdout = paste0(file, ".html")
+  )
 ```
 
 
+
+```{r}
+## now read in and clean up that first file    
+## need custom id
+tibble(state = c("District of Columbia", "Puerto Rico", "Virgin Islands", "Philippine Islands", "Panama Canal"), st = c("DC", "PR", "VI", "PI", "PC")) %>%
+  rbind(tibble(state = state.name, st = state.abb)) -> id
+
+read_html("consol_loans1_justcols.png.html") %>%
+  html_table() %>%
+  pluck(1) %>%
+  select(-"X15") %>%
+  mutate(across(2:last_col(), ~ gsub("\\$", "", .))) %>%
+  mutate(across(2:last_col(), ~ gsub("-", "0", .))) %>%
+  mutate(across(2:last_col(), ~ gsub(",", "", .))) %>%
+  mutate(across(2:last_col(), ~ gsub("\\(", "-", .))) %>%
+  mutate(across(2:last_col(), ~ gsub("\\)", "", .))) %>%
+  mutate(across(2:last_col(), ~ as.numeric(.))) %>%
+  mutate(X14 = case_when(X1 == "CONTINENTAL U.S.TOTAL" ~ 12500198000,
+                         TRUE ~ X14)) %>%
+##  rowwise() %>% made some checksums; the table doesn't look any worse than it did before
+##  mutate(checksum = sum(across(X2:X13))) %>%
+##  mutate(diff = X14 - checksum) -> loans1_39
+  
+## now label this tibble
+  rename("state" = "X1", "FCA" = "X2", "Commodity Credit Corp" = "X3", "FSA" = "X4", "Farm Tenant Purchase" = "X5", "REA" = "X6", "Fed Res Bd" = "X7", "USHA" = "X8", "PWA loans" = "X9", "RFC" = "X10", "Disaster Loan Corp" = "X11", "HOLC" = "X12", "HOLC and Treas" = "X13", "Total Loans" = "X14") %>%
+  right_join(id, by = "state") %>%
+  relocate(st, .after = state) %>%
+  rename_with(~ paste0(.x, "_loan")) %>%
+  rename("st" = "st_loan") %>%
+  mutate(src = 39) -> loans1_39
+
+## now read in and clean up that second file
+read_html("consol_loans2_justcols.png.html") %>%
+  html_table() %>%
+  pluck(1) %>%
+  rename("state" = "X4", "Title I" = "X1", "Title II" = "X2", "Total Insured" = "X3") %>%
+  right_join(id, by = "state") %>%
+  select(-"state") %>%
+  rename_with(~ paste0(.x, "_loan")) %>%
+  rename("st" = "st_loan") %>%
+  relocate(st) %>%
+  mutate(across(2:last_col(), ~ gsub("\\$", "", .))) %>%
+  mutate(across(2:last_col(), ~ gsub("-", "0", .))) %>%
+  mutate(across(2:last_col(), ~ gsub(",", "", .))) %>%
+  mutate(across(2:last_col(), ~ gsub("\\(", "-", .))) %>%
+  mutate(across(2:last_col(), ~ gsub("\\)", "", .))) %>%
+  mutate(across(everything(), ~replace_na(.x, "0"))) %>%
+  mutate(across(2:last_col(), ~ as.numeric(.))) -> loans2_39
+
+left_join(loans1_39, loans2_39) -> loans_39
+```
+
+```{r}
+## now read in and clean up first part of expenses
+read_html("consol_exp1_justcols.png.html") %>%
+  html_table() %>%
+  pluck(1) %>%
+  rename("state" = "X1", "AAA" = "X2", "FSA" = "X3", "Other_ag" = "X4",
+         "Bur of Rec" = "X5", "Rivers and Harbors" = "X6", "Natl Guard" = "X7",
+         "CCC" = "X8", "SSA" = "X9", "NYA" = "X10", "Pub Bldgs" = "X11") %>%
+  right_join(id, by = "state") %>%
+  relocate(st, .after = state) %>%
+  mutate(src = 39) %>%
+  mutate(across(3:last_col(), ~ gsub("\\$", "", .))) %>% ## takes out dollar signs
+  mutate(across(3:last_col(), ~ gsub("-", "0", .))) %>% ## replaces - with 0
+  mutate(across(3:last_col(), ~ gsub(",", "", .))) %>% ## takes out commas
+  mutate(across(3:last_col(), ~ gsub("\\(", "-", .))) %>% ## replaces left paren with minus sign
+  mutate(across(3:last_col(), ~ gsub("\\)", "", .))) %>% ## takes out right paren
+  mutate(across(3:last_col(), ~ as.numeric(.))) -> exp1_39
+
+## now read in and clean up second part of expenses
+
+tibble(state = c("Dist. of Columbia", "Puerto Rico", "Virgin Islands", "Philippine Is.", "Panama Canal"), st = c("DC", "PR", "VI", "PI", "PC")) %>%
+  rbind(tibble(state = state.name, st = state.abb)) -> id
+
+
+read_html("consol_exp2_justcols.png.html") %>%
+  html_table() %>%
+  pluck(1) %>%
+  relocate(X10) %>%
+  rename("state" = "X10", "Pub Rds" = "X1", "PWA_fed" = "X2", "PWA_nonfed" = "X3", "USHA" = "X4", "WPA" = "X5",
+         "VA" = "X6", "Misc ERA" = "X7", "Other" = "X8", "Total_exp" = "X9") %>%
+  mutate(rn = row_number()) %>%
+  relocate(rn) %>% ## missed out on some labels
+  mutate("state" = case_when(rn == 20 ~ "Massachusetts",
+                              rn == 50 ~ "Continental U.S. Total",
+                             rn == 51 ~ "Alaska",
+                             rn == 52 ~ "Hawaii",
+                             rn == 53 ~ "Puerto Rico",
+                             rn == 54 ~ "Virgin Islands",
+                             rn == 55 ~ "Panama Canal",
+                             rn == 56 ~ "Philippine Is.",
+                             rn == 57 ~ "Territories Total",
+                             TRUE ~ state)) %>%
+  right_join(id, by = "state") %>%
+  relocate(st) %>%
+  select(-c("rn", "state")) %>%
+  mutate(src = 39) %>%
+  mutate(across(2:last_col(), ~ gsub("\\$", "", .))) %>% ## takes out dollar signs
+  mutate(across(2:last_col(), ~ gsub("-", "0", .))) %>% ## replaces - with 0
+  mutate(across(2:last_col(), ~ gsub(",", "", .))) %>% ## takes out commas
+  mutate(across(2:last_col(), ~ gsub("\\(", "-", .))) %>% ## replaces left paren with minus sign
+  mutate(across(2:last_col(), ~ gsub("\\)", "", .))) %>% ## takes out right paren
+  mutate(across(2:last_col(), ~ as.numeric(.))) -> exp2_39
+
+left_join(exp1_39, exp2_39) -> exp_39
+```
+
+```{r}
+exp_39 %>%
+  select(-state) %>%
+  left_join(loans_39) %>%
+  select(c(st, starts_with("Total"))) %>%
+  rowwise() %>%
+  mutate(le = sum(across(where(is.numeric)))) %>%
+  select(c(st, le)) -> le39
+```
+
+```{r}
+file = "./consol_40_loans1_justcols.png"
+  
+system2(py_exe(), 
+          args = c('-m mlx_vlm generate',
+                   "--model mlx-community/GLM-OCR-bf16",
+                   paste0("--image ", file),
+                   "--max-tokens 24576",
+                   "--temperature 0.0",
+                   "--prompt \"Table Recognition: Extract the table exactly as shown. Do not repeat rows or columns. Output only the table, no explanation.\""),
+          stdout = paste0(file, ".html")
+  )
+```
+
+```{r}
+file = "./consol_40_loans2_justcols.png"
+  
+system2(py_exe(), 
+          args = c('-m mlx_vlm generate',
+                   "--model mlx-community/GLM-OCR-bf16",
+                   paste0("--image ", file),
+                   "--max-tokens 24576",
+                   "--temperature 0.0",
+                   "--prompt \"Table Recognition: Extract the table exactly as shown. Do not repeat rows or columns. Output only the table, no explanation.\""),
+          stdout = paste0(file, ".html")
+  )
+```
+
+```{r}
+## clean first half of 1940 first page
+tibble(state = c("District of Columbia", "Puerto Rico", "Virgin Islands", "Philippine Islands", "Panama Canal"), st = c("DC", "PR", "VI", "PI", "PC")) %>%
+  rbind(tibble(state = state.name, st = state.abb)) -> id
+
+read_html("consol_40_loans1_justcols.png.html") %>%
+  html_table() %>%
+  pluck(1) %>%
+  mutate(X1 = gsub("\\.","", X1)) %>%
+  rename("state" = "X1", "FCA_loan" = "X2", "Commodity Credit Corp_loan" = "X3", "FSA_loan" = "X4", "Farm Tenant Purchase_loan" = "X5", "REA_loan" = "X6", "Fed Res Bd_loan" = "X7", "PWA loans_loan" = "X8", "RFC_loan" = "X9", "Disaster Loan Corp_loan" = "X10", "HOLC_loan" = "X11", "HOLC and Treas_loan" = "X12", "Total Loans_loan" = "X13") %>%
+  left_join(id, by = "state") %>%
+  relocate(st) %>%
+  drop_na() %>%
+  select(c(-state)) %>%
+  mutate(across(2:last_col(), ~ gsub("\\$", "", .))) %>%
+  mutate(across(2:last_col(), ~ gsub("\\,", "", .))) %>%
+  mutate(across(2:last_col(), ~ gsub("\\-", "0", .))) %>%
+  mutate(across(2:last_col(), ~ gsub("\\(0", "\\-", .))) %>%
+  mutate(across(2:last_col(), ~ gsub("\\)", "", .))) %>%
+  mutate(across(2:last_col(), ~ as.numeric(.))) -> loans1_40
+
+## clean second half of 1940 first page
+read_html("consol_40_loans2_justcols.png.html") %>%
+  html_table() %>%
+  pluck(1) %>%
+  rename("state" = "X11", "Title I_loans" = "X1", "Title II_loans" = "X2", "Total Insured_loan" = "X3", "AAA" = "X4", "Rur Rehab" = "X5", "Resettlement" = "X6", "Fed Surp Comm" = "X7", "Reg Soil Con" = "X8", "Land Util" = "X9", "Other Ag" = "X10") %>%
+  relocate(state) %>%
+  right_join(id) %>%
+  relocate(st) %>%
+  select(-state) %>%
+  mutate(across(2:last_col(), ~ gsub("\\$", "", .))) %>%
+  mutate(across(2:last_col(), ~ gsub("\\,", "", .))) %>%
+  mutate(across(2:last_col(), ~ gsub("\\-", "0", .))) %>%
+  mutate(across(2:last_col(), ~ gsub("\\(0", "\\-", .))) %>%
+  mutate(across(2:last_col(), ~ gsub("\\)", "", .))) %>%
+  mutate(across(2:last_col(), ~ as.numeric(.))) -> loans2_40
+left_join(loans1_40, loans2_40) -> loans_40
+```
+
+```{r}
+file = "./consol_40_2b_justcols.png"
+  
+system2(py_exe(), 
+          args = c('-m mlx_vlm generate',
+                   "--model mlx-community/GLM-OCR-bf16",
+                   paste0("--image ", file),
+                   "--max-tokens 24576",
+                   "--temperature 0.0",
+                   "--prompt \"Table Recognition: Extract the table exactly as shown. Do not repeat rows or columns. Output only the table, no explanation.\""),
+          stdout = paste0(file, ".html")
+  )
+file = "./consol_40_2b2_justcols.png"
+  
+system2(py_exe(), 
+          args = c('-m mlx_vlm generate',
+                   "--model mlx-community/GLM-OCR-bf16",
+                   paste0("--image ", file),
+                   "--max-tokens 24576",
+                   "--temperature 0.0",
+                   "--prompt \"Table Recognition: Extract the table exactly as shown. Do not repeat rows or columns. Output only the table, no explanation.\""),
+          stdout = paste0(file, ".html")
+  )
+```
+
+```{r}
+## clean first half of 1940 first page
+tibble(state = c("District of Columbia", "Puerto Rico", "Virgin Islands", "Philippine Islands", "Panama Canal"), st = c("DC", "PR", "VI", "PI", "PC")) %>%
+  rbind(tibble(state = state.name, st = state.abb)) -> id
+
+read_html("consol_40_2b_justcols.png.html") %>%
+  html_table() %>%
+  pluck(1) %>%
+  mutate(X1 = gsub("\\.","", X1)) %>%
+  rename("state" = "X1", "CCC reg" = "X2", "CCC Indian" = "X3", "SSA" = "X4", "USES" = "X5", "NYA" = "X6", "Pub Health" = "X7", "Pub Bldg" = "X8", "Pub Rds" = "X9", "PWA_fed" = "X10", "PWA_nonfed" = "X11", "USHA" = "X12", "WPA" = "X13") %>%
+  left_join(id, by = "state") %>%
+  relocate(st) %>%
+  drop_na() %>%
+  select(c(-state)) %>%
+  mutate(across(2:last_col(), ~ gsub("\\$", "", .))) %>%
+  mutate(across(2:last_col(), ~ gsub("\\,", "", .))) %>%
+  mutate(across(2:last_col(), ~ gsub("\\-", "0", .))) %>%
+  mutate(across(2:last_col(), ~ gsub("\\(0", "\\-", .))) %>%
+  mutate(across(2:last_col(), ~ gsub("\\)", "", .))) %>%
+  mutate(across(2:last_col(), ~ as.numeric(.))) -> exp1_40
+
+read_html("consol_40_2b2_justcols.png.html") %>%
+  html_table() %>%
+  pluck(1) %>%
+  janitor::clean_names() %>%
+  select(-x) %>%
+  rename("state" = "x_9", "Bur of Rec" = "x_2", "Rivers and Harbors" = "x_3", "Natl Guard" = "x_4", "VA" = "x_5", "Misc ERA" = "x_6", "Other" = "x_7", "Total_exp" = "x_8") %>%
+  left_join(id, by = "state") %>%
+  relocate(st) %>%
+  select(c(-state)) %>%
+  mutate(across(2:last_col(), ~ gsub("\\$", "", .))) %>%
+  mutate(across(2:last_col(), ~ gsub("\\,", "", .))) %>%
+  mutate(across(2:last_col(), ~ gsub("\\-", "0", .))) %>%
+  mutate(across(2:last_col(), ~ gsub("\\(0", "\\-", .))) %>%
+  mutate(across(2:last_col(), ~ gsub("\\)", "", .))) %>%
+  mutate(across(2:last_col(), ~ as.numeric(.))) -> exp2_40
+left_join(exp1_40, exp2_40) -> exp_40
+```
+
+```{r}
+## combine years
+loans_39 %>% select(c(-state_loan)) -> loans_39
+names(loans_39)
+names(loans_40)
+loans_39 %>%
+  mutate(Ag_loan = FCA_loan + `Commodity Credit Corp_loan` + FSA_loan + `Farm Tenant Purchase_loan` + REA_loan) %>%
+  mutate(FLA_loan = RFC_loan + `Disaster Loan Corp_loan` + HOLC_loan + `HOLC and Treas_loan`) %>%
+  mutate(FWA_loan = USHA_loan + `PWA loans_loan`) %>%
+  mutate(FHA_loan = `Title I_loan` + `Title II_loan`) %>%
+  mutate(FRB_loan = `Fed Res Bd_loan`) %>%
+  select(c(st, Ag_loan, FRB_loan, FWA_loan, FLA_loan, FHA_loan)) %>%
+  mutate(yr = 39) -> simple_loans_39
+loans_40 %>%
+  mutate(Ag_loan = FCA_loan + `Commodity Credit Corp_loan` + FSA_loan + `Farm Tenant Purchase_loan` + REA_loan) %>%
+  mutate(FRB_loan = `Fed Res Bd_loan`) %>%
+  mutate(FWA_loan = `PWA loans_loan`) %>%
+  mutate(FLA_loan = RFC_loan + `Disaster Loan Corp_loan` + HOLC_loan + `HOLC and Treas_loan`) %>%
+  mutate(FHA_loan = `Title I_loans` + `Title II_loans`) %>%
+  select(c(st, Ag_loan, FRB_loan, FWA_loan, FLA_loan, FHA_loan)) %>%
+  mutate(yr = 40) -> simple_loans_40
+
+exp_39 %>%
+  mutate(Ag = AAA + FSA + Other_ag) %>%
+  mutate(Int = `Bur of Rec`) %>%
+  mutate(War = `Rivers and Harbors`+ `Natl Guard`) %>%
+  mutate(CCC = CCC) %>%
+  mutate(SSA = SSA) %>%
+  mutate(NYA = NYA) %>%
+  mutate(FWA = `Pub Bldgs` + `Pub Rds` + USHA) %>%
+  mutate(PWA = PWA_fed + PWA_nonfed) %>%
+  mutate(WPA = WPA) %>%
+  mutate(VA = VA) %>%
+  mutate(Misc_ERA = `Misc ERA`) %>%
+  mutate(Other = Other) %>%
+  select(c(st, Ag, Int, War, CCC, SSA, NYA, FWA, PWA, WPA, VA, Misc_ERA, Other)) %>%
+  mutate(yr = 39) -> simple_exp_39
+
+loans_40 %>%
+  select(c(st, AAA, `Rur Rehab`, Resettlement, `Fed Surp Comm`, `Reg Soil Con`, `Land Util`, `Other Ag`)) -> exp_40a
+left_join(exp_40, exp_40a) -> exp_all_40
+exp_all_40 %>%
+  mutate(Ag = AAA + `Rur Rehab` + Resettlement + `Fed Surp Comm` + `Reg Soil Con` + `Land Util` + `Other Ag`) %>%
+  mutate(Int = `Bur of Rec`) %>%
+  mutate(War = `Rivers and Harbors` + `Natl Guard`) %>%
+  mutate(CCC = `CCC reg` + `CCC Indian`) %>%
+  mutate(SSA = SSA + USES) %>%
+  mutate(NYA = NYA) %>%
+  mutate(FWA = `Pub Bldg` + `Pub Rds`) %>%
+  mutate(PWA = PWA_fed + PWA_nonfed) %>%
+  mutate(WPA = WPA) %>%
+  mutate(VA = VA) %>%
+  mutate(Misc_ERA = `Misc ERA`) %>%
+  mutate(Other = Other) %>%
+  select(c(st, Ag, Int, War, CCC, SSA, NYA, FWA, PWA, WPA, VA, Misc_ERA, Other)) %>%
+  mutate(yr = 40) -> simple_exp_40
+```
+
+```{r}
+simple_loans_40 %>%
+  mutate(across(where(is.numeric), ~ .x * 1000)) %>%
+  rbind(simple_loans_39) %>%
+  group_by(st) %>%
+  select(-yr) %>%
+  summarize(across(where(is.numeric), sum)) -> ndloans
+
+simple_exp_40 %>%
+  mutate(across(where(is.numeric), ~ .x * 1000)) %>%
+  rbind(simple_exp_39) %>%
+  group_by(st) %>%
+  select(-yr) %>%
+  summarize(across(where(is.numeric), sum)) -> ndexp
+
+left_join(ndexp, ndloans) -> nd_le
+write_csv(nd_le, "nd_le.csv")
+
+nd_le %>%
+  rowwise() %>%
+  mutate(le = sum(across(where(is.numeric)))) %>%
+  select(c(st, le)) -> nd_ttl
+write_csv(nd_ttl, "nd_ttl.csv")
+```
+
+```{r}
+## read territorial tables only from report no. 9
+## starting with the first page, which is Alaska
+
+file = "./terrtables9_1.png"
+system2(py_exe(), 
+          args = c('-m mlx_vlm generate',
+                   "--model mlx-community/GLM-OCR-bf16",
+                   paste0("--image ", file),
+                   "--max-tokens 24576",
+                   "--temperature 0.0",
+                   "--prompt \"Table Recognition: Extract the table exactly as shown. Do not repeat rows or columns. Output only the table, no explanation.\""),
+          stdout = paste0(file, ".html")
+  )
+```
+
+```{r}
+## process Alaska, 1933--1938
+read_html("./terrtables9_1.png.html") %>%
+  html_table() %>%
+  pluck(1) 
+```
 
