@@ -159,3 +159,67 @@ read_html("./terrtables9_6.png.html") %>%
   replace(is.na(.), 0) -> vi_data
 write_csv(vi_data, "vi_data.csv")
 
+## PI & PC pages, OCR
+file = "./terrtables9_7.png"
+system2(py_exe(), 
+        args = c('-m mlx_vlm generate',
+                 "--model mlx-community/GLM-OCR-bf16",
+                 paste0("--image ", file),
+                 "--max-tokens 24576",
+                 "--temperature 0.0",
+                 "--prompt \"Table Recognition: Extract the table exactly as shown. Do not repeat rows or columns. Output only the table, no explanation.\""),
+        stdout = paste0(file, ".html")
+)
+
+## read in and clean
+read_html("terrtables9_7.png.html") %>%
+  html_table() %>% pluck(1) %>%
+  clean_names() %>%
+  mutate(rn = row_number()) %>%
+  relocate(rn) %>%
+  filter(rn < 11) -> pc_raw
+read_html("terrtables9_7.png.html") %>%
+  html_table() %>% pluck(1) %>%
+  clean_names() %>%
+  mutate(rn = row_number()) %>%
+  relocate(rn) %>%
+  filter(rn >= 11) -> pi_raw
+pc_raw %>%
+  select(-rn) %>%
+  filter(!str_starts(x, "Loans")) %>%
+  filter(!str_starts(x, "TOTAL")) %>%
+  filter(!str_starts(x, "Panama")) %>%
+  mutate(across(2:last_col(), ~ gsub("[^0-9.]", "", .))) %>%
+  mutate(across(2:last_col(), ~as.numeric(.))) %>%
+  replace(is.na(.), 0) -> pc_data
+write_csv(pc_data, "pc_data.csv")
+pi_raw %>%
+  select(-rn) %>%
+  filter(!str_starts(x, "Loans")) %>%
+  filter(!str_starts(x, "TOTAL")) %>%
+  filter(!str_starts(x, "Phili")) %>%
+  mutate(across(2:last_col(), ~ gsub("[^0-9.]", "", .))) %>%
+  mutate(across(2:last_col(), ~ as.numeric(.))) %>%
+  replace(is.na(.), 0) -> pi_data
+write_csv(pi_data, "pi_data.csv")
+
+## overall for 1933--1938
+file = "terrtables9_overall.png"
+system2(py_exe(), 
+        args = c('-m mlx_vlm generate',
+                 "--model mlx-community/GLM-OCR-bf16",
+                 paste0("--image ", file),
+                 "--max-tokens 24576",
+                 "--temperature 0.0",
+                 "--prompt \"Table Recognition: Extract the table exactly as shown. Do not repeat rows or columns. Output only the table, no explanation.\""),
+        stdout = paste0(file, ".html")
+)
+read_html(paste0(file, ".html")) %>%
+  html_table() %>% pluck(1) %>%
+  clean_names() %>%
+  rename("x" = "loans_closed") %>%
+  mutate(across(2:last_col(), ~ gsub("[^0-9.]", "", .))) %>%
+  mutate(across(2:last_col(), ~ as.numeric(.))) %>%
+  replace(is.na(.), 0) -> overall_data
+write_csv(overall_data, "overall_data.csv")
+  
