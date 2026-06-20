@@ -204,7 +204,7 @@ pi_raw %>%
 write_csv(pi_data, "pi_data.csv")
 
 ## overall for 1933--1938
-file = "terrtables9_overall.png"
+file = "pngs/terrtables9_overall.png"
 system2(py_exe(), 
         args = c('-m mlx_vlm generate',
                  "--model mlx-community/GLM-OCR-bf16",
@@ -223,3 +223,13 @@ read_html(paste0(file, ".html")) %>%
   replace(is.na(.), 0) -> overall_data
 write_csv(overall_data, "overall_data.csv")
   
+file = "pngs/terrtables9_overall2.png"
+system2(py_exe(), 
+        args = c('-m mlx_vlm generate',
+                 "--model mlx-community/GLM-OCR-bf16",
+                 paste0("--image ", file),
+                 "--max-tokens 24576",
+                 "--temperature 0.0",
+                 "--prompt \"Table Recognition: Extract the table exactly as shown. Do not repeat rows or columns. Output only the table, no explanation.\""),
+        stdout = paste0(file, ".html")
+)
